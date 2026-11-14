@@ -1,0 +1,104 @@
+========================================================================
+             PROJECT ARCHITECTURE DETAILS: ISSUE REPOSITORY RAG
+========================================================================
+
+1. OVERVIEW & OBJECTIVE
+------------------------
+This project is a Python FastAPI-based Retrieval-Augmented Generation (RAG) 
+backend. It provides APIs to manage system issues (tickets) in an Oracle 
+Autonomous Data Warehouse (ADW) database, generate semantic vector 
+embeddings of these issues, and perform vector searches (using Oracle 23ai 
+vector types) to feed context into a LLM proxy chat endpoint for accurate 
+RAG answers.
+
+All external calls to OpenAI (for both embeddings and completions) are 
+routed through a custom enterprise proxy with SSL verification bypassed to 
+prevent certificate conflicts inside enterprise networks.
+
+
+2. KEY DIRECTORIES & SYSTEM COMPONENTS
+---------------------------------------
+* app/
+  ├── main.py
+  │   - Application entry point. Configures the FastAPI app on port 8000, 
+  │     handles CORS, patches local SSL certificate files, and includes all routers.
+  │
+  └── router/
+      ├── issues.py
+      │   - CRUD API endpoints for managing tickets in the database.
+      │   - Handles bulk-uploading issues from Excel (.xlsx) files.
+      │   - Asynchronously triggers background vectorization for new issue entries.
+      │
+      ├── embedding.py
+      │   - Core RAG endpoints: `/chat` (full RAG loop) and `/search_issues` 
+      │     (semantic issue retrieval).
+      │   - `/store_vectors` endpoint to force vectorization of issues.
+      │
+      ├── filemanage.py
+      │   - File attachment endpoints associated with issues.
+      │
+      └── user.py
+          - Authentication and user context endpoints.
+
+* embeddings/
+  ├── embeddings.py
+  │   - Vectorization engine for issue tickets using text-embedding-ada-002 (1536d).
+  │   - Bypasses SSL using a verify-disabled httpx client.
+  │   - Employs asyncio.Semaphore(2) pacing and exponential backoff retry logic 
+  │     to prevent Nginx 502 Bad Gateway errors on the API proxy.
+  │   - Implements checkpointing (commit-per-insert) and resume-on-failure.
+  │
+  ├── embeddingsfiles.py
+  │   - Vectorization logic for uploaded PDF/Word documentation.
+  │
+  └── embeddingsweb.py
+      - Vectorization logic for scraped website information.
+
+* services/
+  ├── ai_service.py
+  │   - Implements the centralized `ask_ai(question)` wrapper.
+  │   - Directly communicates with the OpenAI completions proxy endpoint
+  │     (https://km-bot.aspiresystems.com/ot/v1/chat/completions) using GPT-4o.
+  │   - Features SSL verification bypass (verify=False) and urllib3 warning suppression.
+  │
+  ├── filemanagement.py
+  │   - Lower-level helper routines for managing local file directories.
+  │
+  └── user_service.py
+      - Database lookups and validation logic for user accounts.
+
+* models/
+  └── issue_queries.py
+      - Houses connections and SQL queries for the Oracle Autonomous Data Warehouse.
+      - References two databases: ISSUE_REPOSITORY (main tracker) and 
+        ORACLE_METADATA_KNOWLEDGE (metadata reference schemas).
+
+
+3. DATA FLOWS
+--------------
+A. Ingestion & Asynchronous Vectorization:
+   1. A user inserts a new issue (via `POST /issues` or `POST /issues/bulk-upload`).
+   2. The records are saved in the `ISSUE_TRACKER` table in the database.
+   3. A FastAPI BackgroundTask is triggered with the new issue ID(s).
+   4. The background task fetches only these new issues, combines their text 
+      fields, and requests embeddings using `text-embedding-ada-002` via the proxy.
+   5. The returned float array is saved into the `VECTOR_ISSUES` table using 
+      Oracle's native `TO_VECTOR(:vec)` type.
+
+B. Semantic RAG Search (`/chat`):
+   1. The user sends a query to the `/chat` endpoint.
+   2. The backend generates a query vector embedding using `text-embedding-ada-002` 
+      via the proxy.
+   3. It queries `VECTOR_ISSUES` matching cosine distance:
+      `1 - VECTOR_DISTANCE(v.EMBEDDING, TO_VECTOR(:query_vec), COSINE)`
+   4. It retrieves the **top 6** most relevant issues.
+   5. It merges their fields into a context block and builds a prompt for the LLM.
+   6. It calls `ask_ai()` (GPT-4o) using the completions proxy, which generates 
+      and returns the structured RAG answer to the user.
+
+
+4. PROJECT ENVIRONMENT (.env)
+------------------------------
+* CHATBOT_API_KEY: Authentication token for the km-bot Aspire completions proxy.
+* CHATBOT_API_URL: Target endpoint URL for chat completions.
+* ADW DSN credentials for Autonomous Database connection configurations.

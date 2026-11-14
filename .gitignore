@@ -1,0 +1,13 @@
+# Secrets
+.env
+.env.*
+
+# Runtime data containing employee/customer chat content
+issue_history.json
+fusion_history.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
