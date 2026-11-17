@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Ensure environment variables are loaded
 load_dotenv(override=True)
 
-API_KEY = os.getenv("CHATBOT_API_KEY", "vk_aspire_O4iWo7IG1c3uhtLq")
+API_KEY = os.getenv("CHATBOT_API_KEY")
 URL = os.getenv("CHATBOT_API_URL", "https://km-bot.aspiresystems.com/ot/v1/chat/completions")
 
 def ask_ai(question):

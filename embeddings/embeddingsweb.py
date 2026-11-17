@@ -22,7 +22,7 @@ ssl_context = ssl.create_default_context(cafile=certifi.where())
 httpx._default_ssl_context = ssl_context
 
 load_dotenv(override=True)
-API_KEY = os.getenv("CHATBOT_API_KEY", "vk_aspire_O4iWo7IG1c3uhtLq")
+API_KEY = os.getenv("CHATBOT_API_KEY")
 URL = os.getenv("CHATBOT_API_URL", "https://km-bot.aspiresystems.com/ot/v1/chat/completions")
 BASE_URL = URL.rsplit("/chat/completions", 1)[0] if URL else None
 
@@ -463,19 +463,73 @@ async def search_web_scraped(
         conn.close()
 
 
+def searxng_search(query: str, max_results: int = 4) -> list[dict]:
+    """
+    Search the public web through a SearXNG instance (self-hosted metasearch, no API key).
+    Returns a list of {"title", "url", "text"} dicts.
+    Requires SEARXNG_URL in .env, e.g. https://searx.example.org
+    Optional: SEARXNG_VERIFY_SSL=false for an instance with an untrusted certificate.
+    The instance must allow the JSON output format (search.formats includes "json").
+    """
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    base_url = (os.getenv("SEARXNG_URL") or "").rstrip("/")
+    if not base_url:
+        logger.warning("SearXNG search not configured: set SEARXNG_URL in .env")
+        return []
+    verify_ssl = os.getenv("SEARXNG_VERIFY_SSL", "true").strip().lower() != "false"
+    try:
+        resp = requests.get(
+            f"{base_url}/search",
+            params={"q": query, "format": "json", "language": "en", "safesearch": 1},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; IssueRepoBot/1.0)"},
+            timeout=15,
+            verify=verify_ssl,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"SearXNG search returned HTTP {resp.status_code}")
+            return []
+        hits = resp.json().get("results", [])[:max_results]
+    except Exception as e:
+        logger.error(f"SearXNG search error: {e}")
+        return []
+
+    results = []
+    for hit in hits:
+        url = hit.get("url")
+        if not url:
+            continue
+        # SearXNG returns only snippets, so try to read the full page first.
+        text, title = "", hit.get("title", "")
+        try:
+            page = extract_web_page(url)
+            if page and page.get("text"):
+                text = page["text"]
+                title = page.get("title") or title
+        except Exception as e:
+            logger.error(f"Failed to extract page {url}: {e}")
+        if not text:
+            text = hit.get("content", "")
+        if not text:
+            continue
+        words = text.split()
+        results.append({"title": title, "url": url, "text": " ".join(words[:1000])})
+    return results
+
+
 def dynamic_web_search_and_extract(query: str, max_results: int = 2) -> list[dict]:
     """
-    Search DuckDuckGo HTML for the query (restricted to site:docs.oracle.com).
-    Falls back to Yahoo Search if DuckDuckGo fails or is rate-limited (HTTP 202).
+    Search the public web through SearXNG and return the top results' text.
+    Returns [] if SearXNG is not configured or fails.
     """
     from urllib.parse import urlparse, parse_qs, quote_plus, unquote
     
-    # Optimize search query using LLM to fix typos and translate terms for docs.oracle.com
+    # Optimize search query using LLM to fix typos and translate terms for web search
     try:
         from services.ai_service import ask_ai
         rewrite_prompt = (
             "You are a search query optimizer for Oracle documentation.\n"
-            "Your task is to rewrite the user's query to make it highly effective for searching docs.oracle.com.\n"
+            "Your task is to rewrite the user's query to make it highly effective for web search.\n"
             "Rules:\n"
             "1. Fix any typos or run-on words (e.g., 'documentin' -> 'add document', 'oraclle' -> 'Oracle').\n"
             "2. Translate informal terms to standard Oracle terms (e.g., 'agentic ai studio' -> 'AI Agent Studio').\n"
@@ -486,86 +540,9 @@ def dynamic_web_search_and_extract(query: str, max_results: int = 2) -> list[dic
         )
         optimized_query = ask_ai(rewrite_prompt).strip()
         logger.info(f"Optimized search query from '{query}' to '{optimized_query}'")
-        search_query = f"site:docs.oracle.com {optimized_query}"
+        search_query = optimized_query
     except Exception as e:
         logger.error(f"Failed to optimize search query: {e}")
-        search_query = f"site:docs.oracle.com {query}"
+        search_query = query
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    
-    links = []
-    
-    # 1. Try DuckDuckGo
-    ddg_url = f"https://html.duckduckgo.com/html/?q={quote_plus(search_query)}"
-    logger.info(f"Trying DuckDuckGo search: {ddg_url}")
-    try:
-        resp = requests.get(ddg_url, headers=headers, timeout=10, verify=False)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", class_="result__url", href=True):
-                href = a["href"]
-                parsed = urlparse(href)
-                qs = parse_qs(parsed.query)
-                real_link = qs.get("uddg")
-                if real_link and real_link[0] not in links:
-                    links.append(real_link[0])
-                if len(links) >= max_results:
-                    break
-        else:
-            logger.warning(f"DuckDuckGo search returned HTTP {resp.status_code}")
-    except Exception as e:
-        logger.error(f"DuckDuckGo search error: {e}")
-        
-    # 2. Fallback to Yahoo if DDG returned no links
-    if not links:
-        yahoo_url = f"https://search.yahoo.com/search?p={quote_plus(search_query)}"
-        logger.info(f"Falling back to Yahoo search: {yahoo_url}")
-        try:
-            resp = requests.get(yahoo_url, headers=headers, timeout=12, verify=False)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    real_url = None
-                    if "r.search.yahoo.com" in href:
-                        try:
-                            parsed = urlparse(href)
-                            path_parts = parsed.path.split("/RU=")
-                            if len(path_parts) > 1:
-                                target = path_parts[1].split("/RK=")[0]
-                                real_url = unquote(target)
-                        except Exception:
-                            pass
-                    else:
-                        real_url = href
-                        
-                    if real_url and not real_url.startswith("/"):
-                        parsed_real = urlparse(real_url)
-                        if "docs.oracle.com" in parsed_real.netloc and real_url not in links:
-                            links.append(real_url)
-                            if len(links) >= max_results:
-                                break
-            else:
-                logger.warning(f"Yahoo search returned HTTP {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Yahoo search error: {e}")
-            
-    scraped_results = []
-    for link in links:
-        try:
-            page = extract_web_page(link)
-            if page and page.get("text"):
-                # Clean up text and truncate to ~1000 words to prevent context blowup
-                words = page["text"].split()
-                truncated_text = " ".join(words[:1000])
-                scraped_results.append({
-                    "title": page["title"],
-                    "url": link,
-                    "text": truncated_text
-                })
-        except Exception as e:
-            logger.error(f"Failed to extract page {link}: {e}")
-            
-    return scraped_results
+    return searxng_search(search_query, max_results)

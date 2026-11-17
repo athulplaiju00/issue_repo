@@ -1,11 +1,15 @@
+import os
 import re
 import oracledb
+from dotenv import load_dotenv
 import pandas as pd
 from difflib import SequenceMatcher
 
+load_dotenv(override=True)
+
 # Oracle Autonomous Data Warehouse connection details
 ADW_DB_USER = "ISSUE_REPOSITORY"
-ADW_DB_PASSWORD = "Super#aspire123"
+ADW_DB_PASSWORD = os.getenv("ADW_DB_PASSWORD")
 ADW_DB_DSN = """(DESCRIPTION=(retry_count=20)(retry_delay=3)
 (ADDRESS=(PROTOCOL=TCPS)(PORT=1522)(HOST=adb.ap-hyderabad-1.oraclecloud.com))
 (CONNECT_DATA=(SERVICE_NAME=gd4a1f82d6494e9_ianalyticsadw_high.adb.oraclecloud.com))
@@ -20,7 +24,7 @@ def connect_to_adw():
 
 # Oracle Autonomous Data Warehouse connection details
 ADW_DB_USER_METADATA = "ORACLE_METADATA_KNOWLEDGE"
-ADW_DB_PASSWORD_METADATA = "Super#aspire123"
+ADW_DB_PASSWORD_METADATA = os.getenv("ADW_DB_PASSWORD_METADATA")
 ADW_DB_DSN_METADATA = """(DESCRIPTION=(retry_count=20)(retry_delay=3)
 (ADDRESS=(PROTOCOL=TCPS)(PORT=1522)(HOST=adb.ap-hyderabad-1.oraclecloud.com))
 (CONNECT_DATA=(SERVICE_NAME=gd4a1f82d6494e9_ianalyticsadw_high.adb.oraclecloud.com))

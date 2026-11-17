@@ -11,7 +11,7 @@ from models.issue_queries import connect_to_adw  # your DB connector
 # CONFIGURATION
 # ----------------------------
 load_dotenv(override=True)
-API_KEY = os.getenv("CHATBOT_API_KEY", "vk_aspire_O4iWo7IG1c3uhtLq")
+API_KEY = os.getenv("CHATBOT_API_KEY")
 URL = os.getenv("CHATBOT_API_URL", "https://km-bot.aspiresystems.com/ot/v1/chat/completions")
 BASE_URL = URL.rsplit("/chat/completions", 1)[0] if URL else None
 
