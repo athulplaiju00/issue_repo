@@ -1,3 +1,4 @@
+from services.tls import VERIFY
 import requests
 import certifi
 import ssl
@@ -44,7 +45,7 @@ def upload_to_object_storage(base_url: str, file) -> dict:
         response = requests.put(
             upload_url,
             data=file_bytes,
-            verify=False,
+            verify=VERIFY,
             timeout=60
         )
 
@@ -76,7 +77,6 @@ def upload_to_object_storage(base_url: str, file) -> dict:
 
 
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 def list_object_storage_files(base_url: str, prefix: str = "uploads/") -> list:
@@ -84,7 +84,7 @@ def list_object_storage_files(base_url: str, prefix: str = "uploads/") -> list:
         list_url = f"{base_url}/?prefix={prefix}"
         logger.info(f"Fetching files from: {list_url}")
 
-        response = requests.get(list_url, verify=False, timeout=30)
+        response = requests.get(list_url, verify=VERIFY, timeout=30)
         if response.status_code != 200:
             logger.error(f"Failed to list objects: HTTP {response.status_code}")
             logger.error(response.text)

@@ -1,3 +1,4 @@
+from services.tls import VERIFY
 import os
 import io
 import re
@@ -18,7 +19,6 @@ from embeddings.embeddings import get_embedding_async
 import json
 from dotenv import load_dotenv
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ---------------------------------------
 # CONFIGURATION
@@ -34,7 +34,7 @@ BASE_URL = URL.rsplit("/chat/completions", 1)[0] if URL else None
 client = AsyncOpenAI(
     api_key=API_KEY,
     base_url=BASE_URL,
-    http_client=httpx.AsyncClient(verify=False)
+    http_client=httpx.AsyncClient(verify=VERIFY)
 )
 
 VECTOR_DIM = 1536  # for text-embedding-ada-002
@@ -86,7 +86,7 @@ def extract_object_storage(prefix="uploads/"):
     results = []
 
     list_url = f"{PAR_BASE}?p={PAR_TOKEN}&prefix={prefix}"
-    response = requests.get(list_url, verify=False, timeout=30)
+    response = requests.get(list_url, verify=VERIFY, timeout=30)
     if response.status_code != 200:
         return []
 
@@ -103,7 +103,7 @@ def extract_object_storage(prefix="uploads/"):
             continue
 
         file_url = f"{PAR_BASE}{name}?p={PAR_TOKEN}"
-        file_resp = requests.get(file_url, verify=False, timeout=60)
+        file_resp = requests.get(file_url, verify=VERIFY, timeout=60)
         if file_resp.status_code != 200:
             continue
 

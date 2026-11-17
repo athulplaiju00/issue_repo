@@ -1,3 +1,4 @@
+from services.tls import VERIFY
 import asyncio
 import logging
 import oracledb
@@ -18,7 +19,7 @@ BASE_URL = URL.rsplit("/chat/completions", 1)[0] if URL else None
 client = AsyncOpenAI(
     api_key=API_KEY,
     base_url=BASE_URL,
-    http_client=httpx.AsyncClient(verify=False)
+    http_client=httpx.AsyncClient(verify=VERIFY)
 )
 VECTOR_DIM = 1536
 MODEL_NAME = "text-embedding-ada-002"

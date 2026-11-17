@@ -1,10 +1,10 @@
+from services.tls import VERIFY
 import os
 import requests
 import urllib3
 from dotenv import load_dotenv
 
 # Suppress insecure request warnings from urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Ensure environment variables are loaded
 load_dotenv(override=True)
@@ -33,7 +33,7 @@ def ask_ai(question):
         headers=headers,
         json=data,
         timeout=60,
-        verify=False
+        verify=VERIFY
     )
 
     response.raise_for_status()

@@ -1,10 +1,10 @@
+from services.tls import VERIFY
 import requests
 from requests.auth import HTTPBasicAuth
 import urllib3
 import json, os
 from uuid import uuid4
 import datetime
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 FUSION_BASE_URL = "https://fa-esfe-dev11-saasfademo1.ds-fa.oraclepdemos.com"
 
@@ -29,7 +29,7 @@ def fusion_login(username: str, password: str):
             test_url,
             auth=HTTPBasicAuth(username, password),
             headers={"Accept": "application/json"},
-            verify=False
+            verify=VERIFY
         )
 
         if login_resp.status_code == 401:
@@ -50,7 +50,7 @@ def fusion_login(username: str, password: str):
                 scim_url,
                 auth=HTTPBasicAuth(username, password),
                 headers={"Accept": "application/json"},
-                verify=False
+                verify=VERIFY
             )
 
             fusion_user_id = None

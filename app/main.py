@@ -1,9 +1,8 @@
-import sys, os
+import sys, os, secrets
 import certifi
 
-# Fix broken SSL_CERT_FILE environment variable if it points to a non-existent path
-if "SSL_CERT_FILE" in os.environ and not os.path.exists(os.environ["SSL_CERT_FILE"]):
-    os.environ["SSL_CERT_FILE"] = certifi.where()
+# Corporate CA bundle for outbound HTTPS (see services/tls.py)
+from services.tls import VERIFY  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +20,7 @@ app = FastAPI(
 # Middlewares
 app.add_middleware(
     SessionMiddleware,
-    secret_key="hgjghkjhkuuuu"
+    secret_key=os.getenv("SESSION_SECRET_KEY") or secrets.token_hex(32)
 )
 allowed_origins = [
     "https://aimfusion.aspiresystems.com",

@@ -1,3 +1,4 @@
+from services.tls import VERIFY
 import re
 import ssl
 import certifi
@@ -16,7 +17,6 @@ from models.issue_queries import connect_to_metadata
 # ---------------------------------------
 # CONFIG
 # ---------------------------------------
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ssl_context = ssl.create_default_context(cafile=certifi.where())
 httpx._default_ssl_context = ssl_context
@@ -29,7 +29,7 @@ BASE_URL = URL.rsplit("/chat/completions", 1)[0] if URL else None
 client = AsyncOpenAI(
     api_key=API_KEY,
     base_url=BASE_URL,
-    http_client=httpx.AsyncClient(verify=False)
+    http_client=httpx.AsyncClient(verify=VERIFY)
 )
 
 MODEL_NAME = "text-embedding-ada-002"
@@ -95,7 +95,7 @@ def ensure_web_vector_table(conn):
 # ---------------------------------------
 def extract_web_page(url: str):
     try:
-        resp = requests.get(url, timeout=20, verify=False)
+        resp = requests.get(url, timeout=20, verify=VERIFY)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -285,7 +285,7 @@ async def scrape_page_and_links(
     same_domain_only: bool = True
 ):
     # 1️⃣ Root page (static fetch is OK)
-    resp = requests.get(url, timeout=20, verify=False)
+    resp = requests.get(url, timeout=20, verify=VERIFY)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -311,7 +311,7 @@ async def scrape_page_and_links(
     # 3️⃣ Fetch child pages (controlled)
     for link in links:
         try:
-            r = requests.get(link, timeout=15, verify=False)
+            r = requests.get(link, timeout=15, verify=VERIFY)
             r.raise_for_status()
 
             s = BeautifulSoup(r.text, "html.parser")
@@ -463,44 +463,37 @@ async def search_web_scraped(
         conn.close()
 
 
-def searxng_search(query: str, max_results: int = 4) -> list[dict]:
+def public_web_search(query: str, max_results: int = 5) -> list[dict]:
     """
-    Search the public web through a SearXNG instance (self-hosted metasearch, no API key).
-    Returns a list of {"title", "url", "text"} dicts.
-    Requires SEARXNG_URL in .env, e.g. https://searx.example.org
-    Optional: SEARXNG_VERIFY_SSL=false for an instance with an untrusted certificate.
-    The instance must allow the JSON output format (search.formats includes "json").
+    Search the public web with the ddgs package.
+    Engines are tried one at a time in PUBLIC_SEARCH_BACKENDS order and the search
+    stops at the first engine that returns results, so each query reaches as few
+    outside services as possible. Returns [] if every engine fails.
     """
-    from dotenv import load_dotenv
-    load_dotenv(override=True)
-    base_url = (os.getenv("SEARXNG_URL") or "").rstrip("/")
-    if not base_url:
-        logger.warning("SearXNG search not configured: set SEARXNG_URL in .env")
-        return []
-    verify_ssl = os.getenv("SEARXNG_VERIFY_SSL", "true").strip().lower() != "false"
-    try:
-        resp = requests.get(
-            f"{base_url}/search",
-            params={"q": query, "format": "json", "language": "en", "safesearch": 1},
-            headers={"User-Agent": "Mozilla/5.0 (compatible; IssueRepoBot/1.0)"},
-            timeout=15,
-            verify=verify_ssl,
-        )
-        if resp.status_code != 200:
-            logger.warning(f"SearXNG search returned HTTP {resp.status_code}")
-            return []
-        hits = resp.json().get("results", [])[:max_results]
-    except Exception as e:
-        logger.error(f"SearXNG search error: {e}")
+    from ddgs import DDGS
+    order = [b.strip() for b in os.getenv(
+        "PUBLIC_SEARCH_BACKENDS", "yahoo,mojeek,startpage,duckduckgo,brave").split(",") if b.strip()]
+    hits = []
+    for backend in order:
+        try:
+            with DDGS() as ddgs:
+                hits = list(ddgs.text(query, max_results=max_results, backend=backend))
+        except Exception as e:
+            logger.info(f"Public search engine '{backend}' failed: {e}")
+            hits = []
+        if hits:
+            logger.info(f"Public search answered by '{backend}' ({len(hits)} hits)")
+            break
+    if not hits:
+        logger.warning("Public web search: no engine returned results")
         return []
 
     results = []
     for hit in hits:
-        url = hit.get("url")
+        url = hit.get("href") or hit.get("url")
         if not url:
             continue
-        # SearXNG returns only snippets, so try to read the full page first.
-        text, title = "", hit.get("title", "")
+        title, text = hit.get("title", ""), ""
         try:
             page = extract_web_page(url)
             if page and page.get("text"):
@@ -509,40 +502,8 @@ def searxng_search(query: str, max_results: int = 4) -> list[dict]:
         except Exception as e:
             logger.error(f"Failed to extract page {url}: {e}")
         if not text:
-            text = hit.get("content", "")
+            text = hit.get("body", "")  # search snippet as fallback
         if not text:
             continue
-        words = text.split()
-        results.append({"title": title, "url": url, "text": " ".join(words[:1000])})
+        results.append({"title": title, "url": url, "text": " ".join(text.split()[:1000])})
     return results
-
-
-def dynamic_web_search_and_extract(query: str, max_results: int = 2) -> list[dict]:
-    """
-    Search the public web through SearXNG and return the top results' text.
-    Returns [] if SearXNG is not configured or fails.
-    """
-    from urllib.parse import urlparse, parse_qs, quote_plus, unquote
-    
-    # Optimize search query using LLM to fix typos and translate terms for web search
-    try:
-        from services.ai_service import ask_ai
-        rewrite_prompt = (
-            "You are a search query optimizer for Oracle documentation.\n"
-            "Your task is to rewrite the user's query to make it highly effective for web search.\n"
-            "Rules:\n"
-            "1. Fix any typos or run-on words (e.g., 'documentin' -> 'add document', 'oraclle' -> 'Oracle').\n"
-            "2. Translate informal terms to standard Oracle terms (e.g., 'agentic ai studio' -> 'AI Agent Studio').\n"
-            "3. Keep the core meaning of the query.\n"
-            "4. Avoid adding the generic brand keyword 'Oracle' to search keywords unless it is part of a specific product name (e.g., use 'AI Agent Studio' instead of 'Oracle AI Agent Studio'), as it biases search engine results toward general release notes pages.\n"
-            "5. Respond with ONLY the optimized search keywords/phrase. Do NOT include any explanations, markdown, or punctuation.\n\n"
-            f"User query: {query}"
-        )
-        optimized_query = ask_ai(rewrite_prompt).strip()
-        logger.info(f"Optimized search query from '{query}' to '{optimized_query}'")
-        search_query = optimized_query
-    except Exception as e:
-        logger.error(f"Failed to optimize search query: {e}")
-        search_query = query
-    
-    return searxng_search(search_query, max_results)

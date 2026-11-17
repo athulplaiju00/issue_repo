@@ -11,3 +11,6 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Local CA bundle (corporate root certificates)
+certs/

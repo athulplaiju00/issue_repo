@@ -1,3 +1,4 @@
+from services.tls import VERIFY
 
 from fastapi import APIRouter, Body, Path,Query
 import requests
@@ -421,20 +422,19 @@ async def chat_new(chat_id: str, request: Request):
             [f"[{c['source'].upper()}] {c['text']}" for c in matches]
         )
     else:
-        from embeddings.embeddingsweb import dynamic_web_search_and_extract
-        web_results = await asyncio.to_thread(dynamic_web_search_and_extract, query, 4)
+        from embeddings.embeddingsweb import public_web_search
+        web_results = await asyncio.to_thread(public_web_search, query, 5)
         if web_results:
             context_text = "\n\n".join(
                 [f"[WEB] Title: {r['title']} | URL: {r['url']} | Content: {r['text']}" for r in web_results]
             )
         else:
-            context_text = "No relevant context found in Issue Repository or Web search."
-
+            context_text = "No relevant context found in Issue Repository or public web search."
     prompt = (
         "Role:\n"
-        "You are an Oracle Fusion Knowledge Assistant for Consultants.\n"
+        "You are a knowledgeable assistant for consultants and support teams. You answer from the issue repository, and you have deep Oracle Fusion knowledge (Finance, SCM, HCM).\n"
         "Your responsibility is to provide precise, actionable, and implementation-focused guidance "
-        "to Oracle Fusion consultants and support teams across Finance, SCM, and HCM.\n"
+        "to consultants and support teams on any technology topic, with deep Oracle Fusion coverage across Finance, SCM, and HCM.\n"
         "You are NOT a code generator. Do NOT provide SQL, PL/SQL, APIs, or scripts.\n"
         "Your answers must be structured, professional, and suitable for real-world consulting and support.\n\n"
 
@@ -448,8 +448,8 @@ async def chat_new(chat_id: str, request: Request):
         "1. ALWAYS search the Issues Repository first.\n"
         "2. If a relevant issue exists, answer ONLY using the information from the Issues Repository.\n"
         "3. Do NOT use or refer to any File or Document repository.\n"
-        "4. Use Web information ONLY when no relevant Issue exists.\n"
-        "5. Never mix Issue Repository content with Web content.\n\n"
+        "4. Use general knowledge ONLY when no relevant Issue exists.\n"
+        "5. Never mix Issue Repository content with general knowledge.\n\n"
 
         "HISTORY-AWARE CONTINUOUS CHAT RULE (CRITICAL):\n"
         "- Always analyze the conversation history.\n"
@@ -473,34 +473,26 @@ async def chat_new(chat_id: str, request: Request):
         "- At the end include:\n"
         "  Issue Reference: Issue ID <ID> - <Issue Title>\n\n"
         
-        "WEB FALLBACK RULE:\n"
-        "- Only when NO relevant issue exists in the Issues Repository:\n"
-        "- Search official Oracle documentation.\n"
-        "- Prefer Oracle Help Center, Oracle Documentation, Oracle Support, Oracle Learn and Oracle Cloud documentation.\n"
-        "- Generate a complete consultant-oriented answer.\n"
-        "- At the end include:\n"
-        "  Source: Web\n"
-        "  Document: <Document Title>\n"
-        "  Reference: <Full URL>\n\n"
+         "WEB CONTEXT RULE:\n"
+         "- Only when the context contains [WEB] results and no relevant Issue exists:\n"
+         "- Answer from the [WEB] results only, in the required format.\n"
+         "- At the end include:\n"
+         "  Source: Web\n"
+         "  Reference: <URL taken from a [WEB] result>\n\n"
          "GENERAL KNOWLEDGE FALLBACK RULE (ONLY WHEN REQUIRED):\n"
-        "- Apply this rule ONLY when no relevant Issue Repository data is available.\n"
+        "- Apply this rule ONLY when no relevant Issue Repository data is available and no [WEB] results are provided.\n"
         "- If no relevant issue exists, answer using your built-in knowledge.\n"
         "- Answer ONLY when you are reasonably confident in the correctness of the information.\n"
-        "- Do NOT fabricate or invent Issue IDs, Oracle documentation, document titles, URLs, or references.\n"
-        "- If Web documents are explicitly provided in the retrieved context, use them as supporting evidence and cite them.\n"
-        "- If no Web documents are available in the retrieved context, do NOT generate or assume any Web reference.\n"
+        "- Do NOT fabricate or invent Issue IDs, documentation, document titles, URLs, or references.\n"
         "- In that case, end the response with:\n"
         "  Source: General Knowledge\n"
-        "- If no relevant information is found in either the Issue Repository or official public Oracle/web documentation, you must respond with EXACTLY: \"I am not able to find any relevant information. Need more information.\"\n"
-        "- This rule applies ONLY after the Issue Repository has been checked and no relevant information is found.\n\n"
+        "- If no relevant information is found in the Issue Repository and no [WEB] results are provided, you must respond with EXACTLY: \"I am not able to find any relevant information. Need more information.\"\n"
+        "- This rule applies ONLY after the Issue Repository and any [WEB] results have been checked and no relevant information is found.\n\n"
         "STRICT RESPONSE RULES:\n"
         "- Never say you searched multiple sources.\n"
         "- Never mention File Repository.\n"
         "- Never mention Document Repository.\n"
-        "- If Issue Repository answered the question, do not use Web.\n"
-        "- If Web is used, clearly state 'Source: Web'.\n"
         "- Never fabricate references.\n"
-        "- Only use URLs actually returned by the web search.\n\n"
 
         "User Question:\n"
         f"{query}\n\n"
@@ -513,7 +505,7 @@ async def chat_new(chat_id: str, request: Request):
         "- One sentence describing the issue in plain terms.\n\n"
 
         "## Navigation / Task Path\n"
-        "- Provide exact Oracle Fusion menu paths and task names.\n\n"
+        "- For Oracle Fusion questions, provide exact menu paths and task names.\n\n"
 
         "## Data Model / Subject Areas\n"
         "- List relevant module, functional area, tables, views, or subject areas.\n\n"
@@ -538,7 +530,7 @@ async def chat_new(chat_id: str, request: Request):
         "     Format:\n"
         "     Web Reference: <Document Title>\n"
         "     URL: <Full URL>\n"
-        "     Use this ONLY when the answer is generated from Oracle documentation or another trusted web source.\n\n"
+        "     Use this ONLY when the answer is generated from a web source.\n\n"
 
         "- If an Issue Reference is available, DO NOT include a Web Reference.\n"
         "- Use a Web Reference ONLY when no relevant Issue Reference exists.\n"
@@ -546,7 +538,7 @@ async def chat_new(chat_id: str, request: Request):
         "  **No references available.**\n\n"
         "Style & Tone:\n"
         "- Consultant-oriented.\n"
-        "- Oracle Fusion implementation-focused.\n"
+        "- Practical and implementation-focused.\n"
         "- Professional.\n"
         "- Clear and actionable.\n"
     )
@@ -785,22 +777,21 @@ async def chat_existing(chat_id: str, session_id: str, request: Request):
     if has_relevant_issue:
         rag_context = "\n\n".join([f"[{c['source'].upper()}] {c['text']}" for c in matches])
     else:
-        from embeddings.embeddingsweb import dynamic_web_search_and_extract
-        web_results = await asyncio.to_thread(dynamic_web_search_and_extract, query, 4)
+        from embeddings.embeddingsweb import public_web_search
+        web_results = await asyncio.to_thread(public_web_search, query, 5)
         if web_results:
             rag_context = "\n\n".join(
                 [f"[WEB] Title: {r['title']} | URL: {r['url']} | Content: {r['text']}" for r in web_results]
             )
         else:
-            rag_context = "No relevant context found in Issue Repository or Web search."
-
+            rag_context = "No relevant context found in Issue Repository or public web search."
     prompt = (
     "Role:\n"
-    "You are an Oracle Fusion Knowledge Assistant for Consultants.\n"
+    "You are a knowledgeable assistant for consultants and support teams. You answer from the issue repository, and you have deep Oracle Fusion knowledge (Finance, SCM, HCM).\n"
     "Your responsibility is to provide precise, actionable, and implementation-focused guidance "
-    "to Oracle Fusion consultants and L2/L3 support teams across Finance, SCM, and HCM.\n"
+    "to consultants and L2/L3 support teams on any technology topic, with deep Oracle Fusion coverage across Finance, SCM, and HCM.\n"
     "You are NOT a code generator. Do NOT provide SQL, PL/SQL, REST, SOAP, Groovy, or scripts.\n"
-    "Your responses must be professional, accurate, and suitable for real-world Oracle Fusion "
+    "Your responses must be professional, accurate, and suitable for real-world "
     "consulting and production support.\n\n"
 
     "IMPORTANT OUTPUT RULES:\n"
@@ -860,14 +851,20 @@ async def chat_existing(chat_id: str, session_id: str, request: Request):
     "- If source type = 'issue' ONLY → Response in plain format, NO structured sections\n"
     "- If source type includes 'web' → Include Web Reference in References section\n\n"
 
+    "WEB CONTEXT RULE:\n"
+    "- Only when the context contains [WEB] results and no relevant Issue exists:\n"
+    "- Answer from the [WEB] results only, in the required format.\n"
+    "- At the end include:\n"
+    "  Source: Web\n"
+    "  Reference: <URL taken from a [WEB] result>\n\n"
     "GENERAL KNOWLEDGE FALLBACK RULE:\n"
-    "- Apply this rule ONLY when no relevant Issue Repository data or Web search data is available, or if the retrieved information is not sufficient to answer the query.\n"
-    "- If no relevant information is found in either the Issue Repository or official public Oracle/web documentation, you must respond with EXACTLY: \"I am not able to find any relevant information. Need more information.\"\n"
+    "- Apply this rule ONLY when no relevant Issue Repository data is available and no [WEB] results are provided, or if the retrieved information is not sufficient to answer the query.\n"
+    "- If no relevant information is found in the Issue Repository and no [WEB] results are provided, you must respond with EXACTLY: \"I am not able to find any relevant information. Need more information.\"\n"
     "- Do NOT say 'I'm sorry, but no relevant information was found...' or anything else in this case.\n\n"
 
     "SOURCE ROUTING LOGIC (STRICT ORDER):\n"
     "1) Issues Repository → Use all parts of the retrieved issue (including Title, Description, and Resolution Details) to answer the query, even if it is not related to Oracle Fusion. Avoid generic refusals if the matching issue provides an answer. Include Issue Reference at the end.\n"
-    "3) Public Oracle Content → Use only official docs + include Web Reference\n\n"
+    "3) Public Web Content → Use reputable public sources, preferring official docs; include Web Reference\n\n"
 
     "User Question:\n"
     f"{query}\n\n"
@@ -895,7 +892,7 @@ async def chat_existing(chat_id: str, session_id: str, request: Request):
     "- One sentence describing the issue in plain terms.\n\n"
 
     "## Navigation / Task Path\n"
-    "- Provide exact Oracle Fusion menu paths and task names.\n\n"
+    "- For Oracle Fusion questions, provide exact menu paths and task names.\n\n"
 
     "## Data Model / Subject Areas\n"
     "- List Fusion module, functional area, task names.\n"
@@ -1134,7 +1131,7 @@ async def scrap_url_with_links(payload: ScrapWithLinksRequest):
 @routeremb.get("/fetch-hyperlinks")
 def fetch_hyperlinks(url: str, same_domain_only: bool = True):
     try:
-        response = requests.get(url, timeout=20, verify=False)
+        response = requests.get(url, timeout=20, verify=VERIFY)
         response.raise_for_status()
 
         links = extract_links(
